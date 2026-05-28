@@ -1,5 +1,5 @@
 server:
-  address: "irc.undernet.org"
+  address: "irc.whatever.org"
   port: 6667
   use_tls: false
 
@@ -9,7 +9,7 @@ identity:
   realname: "Rusty Bidule IRC Bot"
 
 channels:
-  - "#bookz"
+  - "#rusty"
 
 dcc:
   enabled: true
