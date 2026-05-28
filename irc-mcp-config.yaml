@@ -1,0 +1,27 @@
+server:
+  address: "irc.undernet.org"
+  port: 6667
+  use_tls: false
+
+identity:
+  nickname: "rusty-bot"
+  username: "rusty"
+  realname: "Rusty Bidule IRC Bot"
+
+channels:
+  - "#bookz"
+
+dcc:
+  enabled: true
+  download_directory: "./data/irc-downloads"
+  max_file_size_bytes: 104857600  # 100 MB
+  auto_accept: true
+  allowed_extensions: []  # empty = allow all
+
+storage:
+  database_path: "./data/irc-history.db"
+  message_retention_days: 90
+
+mcp:
+  listen_address: "127.0.0.1"
+  port: 5001
