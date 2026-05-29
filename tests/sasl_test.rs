@@ -3,7 +3,7 @@ use irc_mcp_server::irc::sasl::encode_sasl_plain;
 #[test]
 fn test_sasl_plain_encoding() {
     let encoded = encode_sasl_plain("myuser", "mypass");
-    let expected = "bXl1c2VyAG15dXNlcgBteXBhc3M="; // base64("\0myuser\0mypass")
+    let expected = "bXl1c2VyAG15dXNlcgBteXBhc3M="; // base64("myuser\0myuser\0mypass")
     assert_eq!(encoded, expected);
 }
 
