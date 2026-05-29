@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 
 /// Encode credentials for SASL PLAIN mechanism
-/// Format: base64(\0username\0password)
+/// Format: base64(username\0username\0password)
 pub fn encode_sasl_plain(username: &str, password: &str) -> String {
     let auth_string = format!("{}\0{}\0{}", username, username, password);
     STANDARD.encode(auth_string.as_bytes())
