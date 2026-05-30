@@ -450,13 +450,17 @@ async fn handle_tools_call(
 }
 
 /// Start MCP server
-pub async fn start_server(listen_addr: &str, port: u16, state: SharedState) -> anyhow::Result<()> {
+pub async fn start_mcp_server(
+    addr: &str,
+    state: crate::types::SharedState,
+    _database: std::sync::Arc<tokio::sync::Mutex<crate::storage::Database>>,
+) -> anyhow::Result<()> {
     let app = create_mcp_server(state);
-    let addr: SocketAddr = format!("{}:{}", listen_addr, port).parse()?;
+    let socket_addr: SocketAddr = addr.parse()?;
 
-    info!("IRC MCP Server listening on http://{}", addr);
+    info!("IRC MCP Server listening on http://{}", socket_addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(socket_addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())

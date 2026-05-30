@@ -1,14 +1,10 @@
-mod config;
-mod irc;
-mod mcp;
-mod storage;
-mod types;
-
-use crate::config::IrcMcpConfig;
-use crate::storage::Database;
-use crate::types::{AppState, ConnectionStatus};
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use irc_mcp_server::config::IrcMcpConfig;
+use irc_mcp_server::irc::server_manager::ServerManager;
+use irc_mcp_server::mcp::start_mcp_server;
+use irc_mcp_server::storage::cleanup::start_cleanup_loop;
+use irc_mcp_server::storage::Database;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info};
@@ -35,38 +31,68 @@ async fn main() -> Result<()> {
 
     info!("Loading configuration from: {}", config_path);
 
-    // Load and expand configuration
-    let mut config =
-        IrcMcpConfig::from_file(&config_path).context("Failed to load configuration")?;
+    // Load configuration
+    let mut config = IrcMcpConfig::from_file(&config_path)
+        .with_context(|| format!("Failed to load config from {}", config_path))?;
+
     config.expand_paths();
 
-    info!(
-        "Configuration loaded - server: {}:{}, nick: {}",
-        config.server.address, config.server.port, config.identity.nickname
-    );
+    info!("Loaded configuration with {} server(s)", config.servers.len());
 
     // Initialize database
-    let _db =
-        Database::new(&config.storage.database_path).context("Failed to initialize database")?;
-    info!("Database initialized: {}", config.storage.database_path);
+    let database = Arc::new(Mutex::new(
+        Database::new(&config.storage.database_path)
+            .context("Failed to initialize database")?,
+    ));
 
-    // Create shared application state
-    let state = Arc::new(Mutex::new(AppState {
-        irc_sender: None,
-        connection_status: ConnectionStatus::Disconnected,
-        connection_start: None,
-        current_nick: None,
-        joined_channels: Vec::new(),
-        db_path: config.storage.database_path.clone(),
-        config: config.clone(),
-        active_dcc_transfers: HashMap::new(),
-    }));
+    info!("Database initialized at {}", config.storage.database_path);
+
+    // Create server manager
+    let server_manager = ServerManager::new(config.clone(), Arc::clone(&database))
+        .context("Failed to create server manager")?;
+
+    // Start cleanup thread
+    let server_download_dirs: Vec<PathBuf> = config
+        .servers
+        .iter()
+        .map(|s| PathBuf::from(&s.dcc.download_directory))
+        .collect();
+
+    tokio::spawn(start_cleanup_loop(
+        Arc::clone(&database),
+        server_download_dirs,
+        config.storage.cleanup_interval_hours,
+        config.storage.message_retention_days,
+    ));
+
+    info!(
+        "Cleanup thread started (interval: {}h, retention: {}d)",
+        config.storage.cleanup_interval_hours, config.storage.message_retention_days
+    );
+
+    // Connect to all servers
+    server_manager
+        .connect_all()
+        .await
+        .context("Failed to connect to servers")?;
+
+    // Start reconnection monitoring
+    server_manager.start_reconnection_task().await;
+
+    info!("Reconnection monitoring started");
 
     // Start MCP server
-    info!("Starting MCP server...");
-    if let Err(e) = mcp::start_server(&config.mcp.listen_address, config.mcp.port, state).await {
+    let mcp_addr = format!("{}:{}", config.mcp.listen_address, config.mcp.port);
+    info!("Starting MCP server on {}", mcp_addr);
+
+    if let Err(e) = start_mcp_server(
+        &mcp_addr,
+        server_manager.state(),
+        server_manager.database(),
+    )
+    .await
+    {
         error!("MCP server error: {}", e);
-        return Err(e);
     }
 
     Ok(())

@@ -125,7 +125,7 @@ impl IrcClientManager {
                 // Send CAP END
                 client.send(Command::CAP(
                     None,
-                    irc::proto::caps::Subcommand::END,
+                    irc::proto::CapSubCommand::END,
                     None,
                     None,
                 ))?;
@@ -138,7 +138,7 @@ impl IrcClientManager {
                 warn!("SASL negotiation timeout, proceeding without SASL");
                 client.send(Command::CAP(
                     None,
-                    irc::proto::caps::Subcommand::END,
+                    irc::proto::CapSubCommand::END,
                     None,
                     None,
                 ))?;
