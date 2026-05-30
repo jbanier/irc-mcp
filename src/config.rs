@@ -30,7 +30,7 @@ pub struct SaslConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub username: Option<String>,  // If None, uses identity.username
+    pub username: Option<String>, // If None, uses identity.username
 }
 
 impl Default for SaslConfig {
@@ -125,7 +125,10 @@ impl IrcMcpConfig {
 
             // Rest of per-server validation
             if server.address.is_empty() {
-                anyhow::bail!("Server address cannot be empty for server '{}'", server.name);
+                anyhow::bail!(
+                    "Server address cannot be empty for server '{}'",
+                    server.name
+                );
             }
             if server.identity.nickname.is_empty() {
                 anyhow::bail!("Nickname cannot be empty for server '{}'", server.name);
@@ -133,7 +136,11 @@ impl IrcMcpConfig {
         }
 
         // Validate default_server exists
-        if !self.servers.iter().any(|s| s.name == self.mcp.default_server) {
+        if !self
+            .servers
+            .iter()
+            .any(|s| s.name == self.mcp.default_server)
+        {
             anyhow::bail!(
                 "default_server '{}' not found in servers list",
                 self.mcp.default_server

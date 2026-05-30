@@ -16,10 +16,13 @@ fn test_insert_and_retrieve_message() {
         message_type: MessageType::Channel,
         content: "Hello world".to_string(),
         channel: Some("#test".to_string()),
+        server_name: "testserver".to_string(),
     };
 
     db.insert_message(&msg).unwrap();
-    let messages = db.get_messages("#test", 10, None, None, None).unwrap();
+    let messages = db
+        .get_messages("#test", 10, None, None, None, None)
+        .unwrap();
 
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].source_nick, "alice");
@@ -46,6 +49,7 @@ fn test_insert_dcc_transfer() {
         extracted_files: None,
         extraction_status: None,
         extraction_error: None,
+        server_name: "testserver".to_string(),
     };
 
     let id = db.insert_dcc_transfer(&transfer).unwrap();
@@ -78,6 +82,7 @@ fn test_dcc_transfer_with_extraction_metadata() {
         extracted_files: None,
         extraction_status: None,
         extraction_error: None,
+        server_name: "testserver".to_string(),
     };
 
     let transfer_id = db.insert_dcc_transfer(&transfer).unwrap();

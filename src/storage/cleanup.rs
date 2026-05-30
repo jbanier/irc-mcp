@@ -114,8 +114,10 @@ mod tests {
         f.write_all(b"old").unwrap();
         drop(f);
 
-        let old_time = std::time::SystemTime::now() - std::time::Duration::from_secs(100 * 24 * 3600);
-        filetime::set_file_mtime(&old_file, filetime::FileTime::from_system_time(old_time)).unwrap();
+        let old_time =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(100 * 24 * 3600);
+        filetime::set_file_mtime(&old_file, filetime::FileTime::from_system_time(old_time))
+            .unwrap();
 
         // Create new file
         let new_file = temp_dir.path().join("new.txt");

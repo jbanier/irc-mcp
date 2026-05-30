@@ -1,11 +1,11 @@
 // tests/config_multiserver_test.rs
 use irc_mcp_server::config::IrcMcpConfig;
-use tempfile::NamedTempFile;
 use std::io::Write;
+use tempfile::NamedTempFile;
 
 #[test]
 fn test_parse_multiserver_config() {
-    let config_content = r#"
+    let config_content = r##"
 servers:
   - name: "server1"
     address: "irc.example.org"
@@ -33,7 +33,7 @@ mcp:
   listen_address: "127.0.0.1"
   port: 5001
   default_server: "server1"
-"#;
+"##;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(config_content.as_bytes()).unwrap();
@@ -49,7 +49,7 @@ mcp:
 
 #[test]
 fn test_parse_config_with_sasl() {
-    let config_content = r#"
+    let config_content = r##"
 servers:
   - name: "libera"
     address: "irc.libera.chat"
@@ -76,7 +76,7 @@ mcp:
   listen_address: "127.0.0.1"
   port: 5001
   default_server: "libera"
-"#;
+"##;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(config_content.as_bytes()).unwrap();
@@ -84,12 +84,15 @@ mcp:
     let config = IrcMcpConfig::from_file(file.path()).unwrap();
     assert_eq!(config.servers[0].password, Some("my_password".to_string()));
     assert_eq!(config.servers[0].sasl.enabled, true);
-    assert_eq!(config.servers[0].sasl.username, Some("myaccount".to_string()));
+    assert_eq!(
+        config.servers[0].sasl.username,
+        Some("myaccount".to_string())
+    );
 }
 
 #[test]
 fn test_validate_duplicate_server_names() {
-    let config_content = r#"
+    let config_content = r##"
 servers:
   - name: "server1"
     address: "irc.example.org"
@@ -123,19 +126,22 @@ mcp:
   listen_address: "127.0.0.1"
   port: 5001
   default_server: "server1"
-"#;
+"##;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(config_content.as_bytes()).unwrap();
 
     let result = IrcMcpConfig::from_file(file.path());
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Duplicate server name"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Duplicate server name"));
 }
 
 #[test]
 fn test_validate_invalid_default_server() {
-    let config_content = r#"
+    let config_content = r##"
 servers:
   - name: "server1"
     address: "irc.example.org"
@@ -158,12 +164,15 @@ mcp:
   listen_address: "127.0.0.1"
   port: 5001
   default_server: "nonexistent"
-"#;
+"##;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(config_content.as_bytes()).unwrap();
 
     let result = IrcMcpConfig::from_file(file.path());
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("default_server 'nonexistent' not found"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("default_server 'nonexistent' not found"));
 }

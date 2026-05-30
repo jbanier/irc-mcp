@@ -25,6 +25,7 @@ fn test_mcp_get_dcc_info_with_extracted_files() {
         extracted_files: None,
         extraction_status: None,
         extraction_error: None,
+        server_name: "testserver".to_string(),
     };
 
     let transfer_id = db.insert_dcc_transfer(&transfer).unwrap();
@@ -82,6 +83,7 @@ fn test_mcp_list_transfers_includes_extraction_status() {
         extracted_files: None,
         extraction_status: None,
         extraction_error: None,
+        server_name: "testserver".to_string(),
     };
 
     let transfer2 = DccTransfer {
@@ -99,6 +101,7 @@ fn test_mcp_list_transfers_includes_extraction_status() {
         extracted_files: None,
         extraction_status: None,
         extraction_error: None,
+        server_name: "testserver".to_string(),
     };
 
     let transfer3 = DccTransfer {
@@ -116,6 +119,7 @@ fn test_mcp_list_transfers_includes_extraction_status() {
         extracted_files: None,
         extraction_status: None,
         extraction_error: None,
+        server_name: "testserver".to_string(),
     };
 
     let id1 = db.insert_dcc_transfer(&transfer1).unwrap();

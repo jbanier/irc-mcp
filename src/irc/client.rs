@@ -76,12 +76,19 @@ impl IrcClientManager {
         if server_config.sasl.enabled && server_config.password.is_some() {
             if let Err(e) = Self::authenticate_sasl(
                 &client,
-                server_config.sasl.username.as_ref()
+                server_config
+                    .sasl
+                    .username
+                    .as_ref()
                     .unwrap_or(&server_config.identity.username),
                 server_config.password.as_ref().unwrap(),
-            ).await {
-                warn!("SASL authentication failed for {}: {}. Proceeding without SASL.",
-                      server_config.name, e);
+            )
+            .await
+            {
+                warn!(
+                    "SASL authentication failed for {}: {}. Proceeding without SASL.",
+                    server_config.name, e
+                );
             }
         }
 
@@ -117,10 +124,7 @@ impl IrcClientManager {
                 // Wait for AUTHENTICATE +
                 // Then send credentials
                 let encoded = encode_sasl_plain(username, password);
-                client.send(Command::Raw(
-                    "AUTHENTICATE".to_string(),
-                    vec![encoded],
-                ))?;
+                client.send(Command::Raw("AUTHENTICATE".to_string(), vec![encoded]))?;
 
                 // Send CAP END
                 client.send(Command::CAP(
@@ -208,7 +212,12 @@ pub async fn start_message_processor(
 }
 
 /// Execute an IRC command
-async fn execute_command(client: &Client, cmd: IrcCommand, state: &SharedState, server_name: &str) -> Result<()> {
+async fn execute_command(
+    client: &Client,
+    cmd: IrcCommand,
+    state: &SharedState,
+    server_name: &str,
+) -> Result<()> {
     match cmd {
         IrcCommand::Join(channel) => {
             client.send_join(&channel)?;
@@ -244,7 +253,12 @@ async fn execute_command(client: &Client, cmd: IrcCommand, state: &SharedState, 
 }
 
 /// Process a single IRC message
-async fn process_message(message: &Message, state: &SharedState, database: &std::sync::Arc<tokio::sync::Mutex<Database>>, server_name: &str) -> Result<()> {
+async fn process_message(
+    message: &Message,
+    state: &SharedState,
+    database: &std::sync::Arc<tokio::sync::Mutex<Database>>,
+    server_name: &str,
+) -> Result<()> {
     debug!("[{}] IRC message: {:?}", server_name, message);
 
     match &message.command {
@@ -281,7 +295,16 @@ async fn handle_privmsg(
 
     // Check if this is a CTCP message
     if content.starts_with('\x01') && content.ends_with('\x01') {
-        return handle_ctcp(message, &source_nick, target, content, state, database, server_name).await;
+        return handle_ctcp(
+            message,
+            &source_nick,
+            target,
+            content,
+            state,
+            database,
+            server_name,
+        )
+        .await;
     }
 
     let msg_type = if target.starts_with('#') {
@@ -394,13 +417,17 @@ async fn handle_ctcp(
                 extracted_files: None,
                 extraction_status: None,
                 extraction_error: None,
+                server_name: server_name.to_string(),
             };
 
             let db = database.lock().await;
             let transfer_id = db.insert_dcc_transfer(&transfer)?;
             drop(db);
 
-            info!("[{}] Created DCC transfer record with ID: {}", server_name, transfer_id);
+            info!(
+                "[{}] Created DCC transfer record with ID: {}",
+                server_name, transfer_id
+            );
 
             // Spawn download task
             let download_dir = dcc_config.download_directory.clone();
@@ -422,13 +449,19 @@ async fn handle_ctcp(
 
                 match result {
                     Ok((filepath, size, extracted_files)) => {
-                        info!("[{}] DCC download completed: {:?}", server_name_clone, filepath);
+                        info!(
+                            "[{}] DCC download completed: {:?}",
+                            server_name_clone, filepath
+                        );
 
                         // Canonicalize path to ensure it's absolute and usable from any working directory
                         let absolute_path = match filepath.canonicalize() {
                             Ok(path) => path.to_string_lossy().to_string(),
                             Err(e) => {
-                                error!("[{}] Failed to canonicalize path {:?}: {}", server_name_clone, filepath, e);
+                                error!(
+                                    "[{}] Failed to canonicalize path {:?}: {}",
+                                    server_name_clone, filepath, e
+                                );
                                 filepath.to_string_lossy().to_string()
                             }
                         };
@@ -440,7 +473,10 @@ async fn handle_ctcp(
                             Some(&absolute_path),
                             None,
                         ) {
-                            error!("[{}] Failed to update transfer status: {}", server_name_clone, e);
+                            error!(
+                                "[{}] Failed to update transfer status: {}",
+                                server_name_clone, e
+                            );
                         }
 
                         // Update extraction metadata if zip was extracted
@@ -451,7 +487,10 @@ async fn handle_ctcp(
                                 Some(&files),
                                 None,
                             ) {
-                                error!("[{}] Failed to update extraction metadata: {}", server_name_clone, e);
+                                error!(
+                                    "[{}] Failed to update extraction metadata: {}",
+                                    server_name_clone, e
+                                );
                             }
                         }
                     }
@@ -464,7 +503,10 @@ async fn handle_ctcp(
                             None,
                             Some(&e.to_string()),
                         ) {
-                            error!("[{}] Failed to update transfer status: {}", server_name_clone, e);
+                            error!(
+                                "[{}] Failed to update transfer status: {}",
+                                server_name_clone, e
+                            );
                         }
                     }
                 }
@@ -476,7 +518,12 @@ async fn handle_ctcp(
 }
 
 /// Handle JOIN command
-async fn handle_join(message: &Message, channel: &str, state: &SharedState, server_name: &str) -> Result<()> {
+async fn handle_join(
+    message: &Message,
+    channel: &str,
+    state: &SharedState,
+    server_name: &str,
+) -> Result<()> {
     if let Some(nick) = message.source_nickname() {
         let mut state_lock = state.write().await;
 
@@ -495,7 +542,12 @@ async fn handle_join(message: &Message, channel: &str, state: &SharedState, serv
 }
 
 /// Handle PART command
-async fn handle_part(message: &Message, channel: &str, state: &SharedState, server_name: &str) -> Result<()> {
+async fn handle_part(
+    message: &Message,
+    channel: &str,
+    state: &SharedState,
+    server_name: &str,
+) -> Result<()> {
     if let Some(nick) = message.source_nickname() {
         let mut state_lock = state.write().await;
 

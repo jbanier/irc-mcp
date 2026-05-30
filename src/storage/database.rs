@@ -303,14 +303,14 @@ impl Database {
     ) -> Result<Vec<DccTransfer>> {
         let query = if let Some(status) = status_filter {
             format!(
-                "SELECT id, timestamp, sender_nick, filename, filepath, filesize, received_size, status, error, ip_address, port, extraction_status, extraction_error, extracted_files_json
+                "SELECT id, timestamp, sender_nick, filename, filepath, filesize, received_size, status, error, ip_address, port, extraction_status, extraction_error, extracted_files_json, server_name
                  FROM dcc_transfers WHERE status = '{}' ORDER BY timestamp DESC LIMIT {}",
                 status.as_str(),
                 limit
             )
         } else {
             format!(
-                "SELECT id, timestamp, sender_nick, filename, filepath, filesize, received_size, status, error, ip_address, port, extraction_status, extraction_error, extracted_files_json
+                "SELECT id, timestamp, sender_nick, filename, filepath, filesize, received_size, status, error, ip_address, port, extraction_status, extraction_error, extracted_files_json, server_name
                  FROM dcc_transfers ORDER BY timestamp DESC LIMIT {}",
                 limit
             )
@@ -341,6 +341,7 @@ impl Database {
                 extracted_files,
                 extraction_status: row.get(11)?,
                 extraction_error: row.get(12)?,
+                server_name: row.get(14)?,
             })
         })?;
 
@@ -351,7 +352,7 @@ impl Database {
     /// Get DCC transfer by ID
     pub fn get_dcc_transfer(&self, id: i64) -> Result<Option<DccTransfer>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, sender_nick, filename, filepath, filesize, received_size, status, error, ip_address, port, extraction_status, extraction_error, extracted_files_json
+            "SELECT id, timestamp, sender_nick, filename, filepath, filesize, received_size, status, error, ip_address, port, extraction_status, extraction_error, extracted_files_json, server_name
              FROM dcc_transfers WHERE id = ?"
         )?;
 
@@ -381,6 +382,7 @@ impl Database {
                     extracted_files,
                     extraction_status: row.get(11)?,
                     extraction_error: row.get(12)?,
+                    server_name: row.get(14)?,
                 })
             })
             .optional()
@@ -456,7 +458,10 @@ impl Database {
         let timestamp = before.to_rfc3339();
         let deleted = self
             .conn
-            .execute("DELETE FROM messages WHERE timestamp < ?", params![timestamp])
+            .execute(
+                "DELETE FROM messages WHERE timestamp < ?",
+                params![timestamp],
+            )
             .context("Failed to delete old messages")?;
 
         Ok(deleted)

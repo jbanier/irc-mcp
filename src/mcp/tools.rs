@@ -271,7 +271,14 @@ async fn tool_irc_get_messages(arguments: Value, state: SharedState) -> Result<V
     };
 
     let db = Database::new(&db_path)?;
-    let messages = db.get_messages(target, limit, since, sender_filter, search_query, Some(&server_name))?;
+    let messages = db.get_messages(
+        target,
+        limit,
+        since,
+        sender_filter,
+        search_query,
+        Some(&server_name),
+    )?;
 
     Ok(json!({
         "server": server_name,

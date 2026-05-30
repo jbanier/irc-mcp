@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use irc_mcp_server::storage::database::Database;
+use irc_mcp_server::storage::Database;
 use irc_mcp_server::types::{IrcMessage, MessageType};
 use tempfile::tempdir;
 

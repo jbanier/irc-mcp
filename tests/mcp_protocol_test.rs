@@ -3,15 +3,15 @@ use axum::http::{Request, StatusCode};
 use irc_mcp_server::config::IrcMcpConfig;
 use irc_mcp_server::mcp::create_mcp_server;
 use irc_mcp_server::storage::Database;
-use irc_mcp_server::types::{AppState, ConnectionStatus};
+use irc_mcp_server::types::{AppState, ServerContext};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tower::ServiceExt;
 
-async fn create_test_state() -> (Arc<Mutex<AppState>>, TempDir) {
+async fn create_test_state() -> (Arc<RwLock<AppState>>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
     let download_dir = temp_dir.path().join("downloads");
@@ -19,46 +19,42 @@ async fn create_test_state() -> (Arc<Mutex<AppState>>, TempDir) {
     std::fs::create_dir_all(&download_dir).unwrap();
 
     let config = IrcMcpConfig {
-        server: irc_mcp_server::config::ServerConfig {
+        servers: vec![irc_mcp_server::config::ServerConfig {
+            name: "testserver".to_string(),
             address: "irc.test.org".to_string(),
             port: 6667,
             use_tls: false,
-        },
-        identity: irc_mcp_server::config::IdentityConfig {
-            nickname: "testbot".to_string(),
-            username: "test".to_string(),
-            realname: "Test Bot".to_string(),
-        },
-        channels: vec!["#test".to_string()],
-        dcc: irc_mcp_server::config::DccConfig {
-            enabled: true,
-            download_directory: download_dir.to_string_lossy().to_string(),
-            max_file_size_bytes: 10485760,
-            auto_accept: true,
-            allowed_extensions: vec![],
-        },
+            password: None,
+            sasl: irc_mcp_server::config::SaslConfig::default(),
+            identity: irc_mcp_server::config::IdentityConfig {
+                nickname: "testbot".to_string(),
+                username: "test".to_string(),
+                realname: "Test Bot".to_string(),
+            },
+            channels: vec!["#test".to_string()],
+            dcc: irc_mcp_server::config::DccConfig {
+                enabled: true,
+                download_directory: download_dir.to_string_lossy().to_string(),
+                max_file_size_bytes: 10485760,
+                auto_accept: true,
+                allowed_extensions: vec![],
+            },
+        }],
         storage: irc_mcp_server::config::StorageConfig {
             database_path: db_path.to_string_lossy().to_string(),
             message_retention_days: 30,
+            cleanup_interval_hours: 24,
         },
         mcp: irc_mcp_server::config::McpConfig {
             listen_address: "127.0.0.1".to_string(),
             port: 5001,
+            default_server: "testserver".to_string(),
         },
     };
 
     let _db = Database::new(&config.storage.database_path).unwrap();
 
-    let state = Arc::new(Mutex::new(AppState {
-        irc_sender: None,
-        connection_status: ConnectionStatus::Disconnected,
-        connection_start: None,
-        current_nick: None,
-        joined_channels: Vec::new(),
-        db_path: config.storage.database_path.clone(),
-        config,
-        active_dcc_transfers: HashMap::new(),
-    }));
+    let state = Arc::new(RwLock::new(AppState::new(config)));
 
     (state, temp_dir)
 }

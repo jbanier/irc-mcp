@@ -15,7 +15,9 @@ mod tests {
     fn test_encode_basic() {
         let result = encode_sasl_plain("alice", "secret");
         assert!(!result.is_empty());
-        assert!(result.chars().all(|c| c.is_ascii_alphanumeric() || c == '=' || c == '+' || c == '/'));
+        assert!(result
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '=' || c == '+' || c == '/'));
     }
 
     #[test]

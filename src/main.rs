@@ -37,12 +37,14 @@ async fn main() -> Result<()> {
 
     config.expand_paths();
 
-    info!("Loaded configuration with {} server(s)", config.servers.len());
+    info!(
+        "Loaded configuration with {} server(s)",
+        config.servers.len()
+    );
 
     // Initialize database
     let database = Arc::new(Mutex::new(
-        Database::new(&config.storage.database_path)
-            .context("Failed to initialize database")?,
+        Database::new(&config.storage.database_path).context("Failed to initialize database")?,
     ));
 
     info!("Database initialized at {}", config.storage.database_path);
@@ -85,12 +87,8 @@ async fn main() -> Result<()> {
     let mcp_addr = format!("{}:{}", config.mcp.listen_address, config.mcp.port);
     info!("Starting MCP server on {}", mcp_addr);
 
-    if let Err(e) = start_mcp_server(
-        &mcp_addr,
-        server_manager.state(),
-        server_manager.database(),
-    )
-    .await
+    if let Err(e) =
+        start_mcp_server(&mcp_addr, server_manager.state(), server_manager.database()).await
     {
         error!("MCP server error: {}", e);
     }

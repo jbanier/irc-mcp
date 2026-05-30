@@ -1,7 +1,7 @@
 // tests/integration_multiserver_test.rs
 use irc_mcp_server::config::IrcMcpConfig;
-use tempfile::NamedTempFile;
 use std::io::Write;
+use tempfile::NamedTempFile;
 
 #[tokio::test]
 async fn test_multiserver_config_loads() {

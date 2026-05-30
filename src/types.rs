@@ -113,6 +113,8 @@ pub struct DccTransfer {
     pub extracted_files: Option<Vec<ExtractedFile>>,
     pub extraction_status: Option<String>,
     pub extraction_error: Option<String>,
+    #[serde(default)]
+    pub server_name: String,
 }
 
 /// Extracted file metadata from zip archive

@@ -1,11 +1,11 @@
 // tests/cleanup_test.rs
+use chrono::{Duration, Utc};
 use irc_mcp_server::storage::cleanup::cleanup_old_data;
 use irc_mcp_server::storage::Database;
 use irc_mcp_server::types::{IrcMessage, MessageType};
-use chrono::{Duration, Utc};
-use tempfile::{NamedTempFile, TempDir};
 use std::fs;
 use std::path::PathBuf;
+use tempfile::{NamedTempFile, TempDir};
 
 #[tokio::test]
 async fn test_cleanup_old_messages() {
