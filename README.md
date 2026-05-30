@@ -23,34 +23,69 @@ cargo build --release
 Edit `irc-mcp-config.yaml`:
 
 ```yaml
-server:
-  address: "irc.undernet.org"  # IRC server hostname
-  port: 6667                    # IRC server port
-  use_tls: false                # Enable TLS/SSL
-
-identity:
-  nickname: "rusty-bot"         # Bot nickname
-  username: "rusty"             # Username
-  realname: "Rusty Bidule IRC Bot"  # Real name
-
-channels:
-  - "#bookz"                    # Auto-join channels
-
-dcc:
-  enabled: true
-  download_directory: "./data/irc-downloads"
-  max_file_size_bytes: 104857600  # 100 MB
-  auto_accept: true
-  allowed_extensions: []        # Empty = allow all
+servers:
+  - name: "undernet"
+    address: "irc.undernet.org"
+    port: 6667
+    use_tls: false
+    # Optional password (used for SASL if enabled, otherwise PASS command)
+    # password: "server_password"
+    sasl:
+      enabled: false  # Set to true for SASL PLAIN authentication
+      username: "account"  # Optional, defaults to identity.username
+    identity:
+      nickname: "rusty-bot"
+      username: "rusty"
+      realname: "Rusty Bidule IRC Bot"
+    channels:
+      - "#bookz"
+    dcc:
+      enabled: true
+      download_directory: "./data/undernet-downloads"
+      max_file_size_bytes: 104857600  # 100 MB
+      auto_accept: true
+      allowed_extensions: []
 
 storage:
   database_path: "./data/irc-history.db"
   message_retention_days: 90
+  cleanup_interval_hours: 24  # How often to clean up old data
 
 mcp:
   listen_address: "127.0.0.1"
   port: 5001
+  default_server: "undernet"  # Default server for MCP commands
 ```
+
+### Multi-Server Configuration
+
+You can configure multiple IRC servers:
+
+```yaml
+servers:
+  - name: "undernet"
+    address: "irc.undernet.org"
+    # ... undernet config ...
+
+  - name: "libera"
+    address: "irc.libera.chat"
+    port: 6697
+    use_tls: true
+    password: "my_sasl_password"
+    sasl:
+      enabled: true
+      username: "myaccount"
+    # ... libera config ...
+```
+
+### SASL Authentication
+
+For networks that require SASL (like Libera.Chat):
+
+1. Set `sasl.enabled: true`
+2. Provide your account password in `password` field
+3. Optionally set `sasl.username` (defaults to `identity.username`)
+4. Ensure `use_tls: true` for security
 
 ## Running
 
@@ -104,6 +139,13 @@ Enable network permissions in rusty-bidule TUI:
 - **irc_disconnect** - Disconnect from server
 - **irc_status** - Get connection status
 
+### Server Management
+- **irc_set_active_server** - Set the active server for subsequent commands
+- **irc_get_active_server** - Get the currently active server name
+- **irc_list_servers** - List all configured servers with connection status
+- **irc_connect_server** - Manually connect to a specific server
+- **irc_disconnect_server** - Disconnect from a specific server
+
 ### Channel Operations
 - **irc_join_channel** - Join a channel
 - **irc_part_channel** - Leave a channel
@@ -119,6 +161,8 @@ Enable network permissions in rusty-bidule TUI:
 ### Utility
 - **irc_send_raw** - Send raw IRC command
 - **irc_search_history** - Full-text search
+
+**Note:** All tools accept an optional `server` parameter to specify which server to operate on. If omitted, the command operates on the active server (set via `irc_set_active_server` or defaults to `mcp.default_server` from config).
 
 ## Example Usage
 

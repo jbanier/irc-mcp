@@ -1,27 +1,49 @@
-server:
-  address: "irc.whatever.org"
-  port: 6667
-  use_tls: false
+servers:
+  - name: "undernet"
+    address: "irc.undernet.org"
+    port: 6667
+    use_tls: false
+    # password: "optional_server_password"  # Used for SASL if enabled, else PASS command
+    # sasl:
+    #   enabled: false
+    #   username: "account_name"  # Optional, defaults to identity.username
+    identity:
+      nickname: "rusty-bot"
+      username: "rusty"
+      realname: "Rusty Bidule IRC Bot"
+    channels:
+      - "#rusty"
+    dcc:
+      enabled: true
+      download_directory: "./data/undernet-downloads"
+      max_file_size_bytes: 104857600  # 100 MB
+      auto_accept: true
+      allowed_extensions: []  # Empty = allow all
 
-identity:
-  nickname: "rusty-bot"
-  username: "rusty"
-  realname: "Rusty Bidule IRC Bot"
-
-channels:
-  - "#rusty"
-
-dcc:
-  enabled: true
-  download_directory: "./data/irc-downloads"
-  max_file_size_bytes: 104857600  # 100 MB
-  auto_accept: true
-  allowed_extensions: []  # empty = allow all
+  # Example: Libera.Chat with SASL authentication
+  # - name: "libera"
+  #   address: "irc.libera.chat"
+  #   port: 6697
+  #   use_tls: true
+  #   password: "your_sasl_password"
+  #   sasl:
+  #     enabled: true
+  #     username: "your_account_name"
+  #   identity:
+  #     nickname: "rusty-libera"
+  #     username: "rusty"
+  #     realname: "Rusty Bot"
+  #   channels:
+  #     - "#rust"
+  #   dcc:
+  #     enabled: false
 
 storage:
   database_path: "./data/irc-history.db"
   message_retention_days: 90
+  cleanup_interval_hours: 24
 
 mcp:
   listen_address: "127.0.0.1"
   port: 5001
+  default_server: "undernet"  # Server to use when not specified in tool calls
