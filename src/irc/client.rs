@@ -161,6 +161,8 @@ pub async fn start_message_processor(
     mut client: Client,
     mut cmd_receiver: mpsc::UnboundedReceiver<IrcCommand>,
     state: SharedState,
+    database: std::sync::Arc<tokio::sync::Mutex<Database>>,
+    server_name: String,
 ) -> Result<()> {
     let mut stream = client.stream()?;
 
@@ -170,16 +172,16 @@ pub async fn start_message_processor(
             message = stream.next() => {
                 match message {
                     Some(Ok(msg)) => {
-                        if let Err(e) = process_message(&msg, &state).await {
-                            error!("Error processing IRC message: {}", e);
+                        if let Err(e) = process_message(&msg, &state, &database, &server_name).await {
+                            error!("[{}] Error processing IRC message: {}", server_name, e);
                         }
                     }
                     Some(Err(e)) => {
-                        error!("IRC stream error: {}", e);
+                        error!("[{}] IRC stream error: {}", server_name, e);
                         break;
                     }
                     None => {
-                        warn!("IRC stream ended");
+                        warn!("[{}] IRC stream ended", server_name);
                         break;
                     }
                 }
@@ -187,27 +189,30 @@ pub async fn start_message_processor(
 
             // Process outgoing commands
             Some(cmd) = cmd_receiver.recv() => {
-                if let Err(e) = execute_command(&client, cmd, &state).await {
-                    error!("Error executing IRC command: {}", e);
+                if let Err(e) = execute_command(&client, cmd, &state, &server_name).await {
+                    error!("[{}] Error executing IRC command: {}", server_name, e);
                 }
             }
         }
     }
 
     // Connection lost
-    warn!("IRC connection lost");
-    let mut state_lock = state.lock().await;
-    state_lock.connection_status = ConnectionStatus::Disconnected;
-    state_lock.irc_sender = None;
+    warn!("[{}] IRC connection lost", server_name);
+    let mut state_lock = state.write().await;
+    if let Some(ctx) = state_lock.servers.get_mut(&server_name) {
+        ctx.connection_status = ConnectionStatus::Disconnected;
+        ctx.irc_sender = None;
+    }
 
     Ok(())
 }
 
 /// Execute an IRC command
-async fn execute_command(client: &Client, cmd: IrcCommand, state: &SharedState) -> Result<()> {
+async fn execute_command(client: &Client, cmd: IrcCommand, state: &SharedState, server_name: &str) -> Result<()> {
     match cmd {
         IrcCommand::Join(channel) => {
             client.send_join(&channel)?;
+            info!("[{}] Joining channel: {}", server_name, channel);
         }
         IrcCommand::Part(channel, message) => {
             if let Some(msg) = message {
@@ -215,39 +220,45 @@ async fn execute_command(client: &Client, cmd: IrcCommand, state: &SharedState) 
             } else {
                 client.send_part(&channel)?;
             }
+            info!("[{}] Leaving channel: {}", server_name, channel);
         }
         IrcCommand::SendMessage(target, message) => {
             client.send_privmsg(&target, &message)?;
+            debug!("[{}] Sent message to {}: {}", server_name, target, message);
         }
         IrcCommand::SendRaw(raw) => {
             client.send(raw.as_str())?;
+            debug!("[{}] Sent raw command: {}", server_name, raw);
         }
         IrcCommand::Quit(message) => {
             client.send_quit(&message)?;
+            info!("[{}] Quitting: {}", server_name, message);
             // Mark as disconnecting
-            let mut state_lock = state.lock().await;
-            state_lock.connection_status = ConnectionStatus::Disconnected;
+            let mut state_lock = state.write().await;
+            if let Some(ctx) = state_lock.servers.get_mut(server_name) {
+                ctx.connection_status = ConnectionStatus::Disconnected;
+            }
         }
     }
     Ok(())
 }
 
 /// Process a single IRC message
-async fn process_message(message: &Message, state: &SharedState) -> Result<()> {
-    debug!("IRC message: {:?}", message);
+async fn process_message(message: &Message, state: &SharedState, database: &std::sync::Arc<tokio::sync::Mutex<Database>>, server_name: &str) -> Result<()> {
+    debug!("[{}] IRC message: {:?}", server_name, message);
 
     match &message.command {
         Command::PRIVMSG(target, content) => {
-            handle_privmsg(message, target, content, state).await?;
+            handle_privmsg(message, target, content, state, database, server_name).await?;
         }
         Command::NOTICE(target, content) => {
-            handle_notice(message, target, content, state).await?;
+            handle_notice(message, target, content, state, database, server_name).await?;
         }
         Command::JOIN(channel, _, _) => {
-            handle_join(message, channel, state).await?;
+            handle_join(message, channel, state, server_name).await?;
         }
         Command::PART(channel, _) => {
-            handle_part(message, channel, state).await?;
+            handle_part(message, channel, state, server_name).await?;
         }
         _ => {
             // Ignore other commands
@@ -263,12 +274,14 @@ async fn handle_privmsg(
     target: &str,
     content: &str,
     state: &SharedState,
+    database: &std::sync::Arc<tokio::sync::Mutex<Database>>,
+    server_name: &str,
 ) -> Result<()> {
     let source_nick = message.source_nickname().unwrap_or("unknown").to_string();
 
     // Check if this is a CTCP message
     if content.starts_with('\x01') && content.ends_with('\x01') {
-        return handle_ctcp(message, &source_nick, target, content, state).await;
+        return handle_ctcp(message, &source_nick, target, content, state, database, server_name).await;
     }
 
     let msg_type = if target.starts_with('#') {
@@ -289,14 +302,13 @@ async fn handle_privmsg(
         } else {
             None
         },
+        server_name: server_name.to_string(),
     };
 
     // Store in database
-    let state_lock = state.lock().await;
-    if let Err(e) = Database::new(&state_lock.config.storage.database_path)
-        .and_then(|db| db.insert_message(&irc_msg))
-    {
-        error!("Failed to store message: {}", e);
+    let db = database.lock().await;
+    if let Err(e) = db.insert_message(&irc_msg) {
+        error!("[{}] Failed to store message: {}", server_name, e);
     }
 
     Ok(())
@@ -307,7 +319,9 @@ async fn handle_notice(
     message: &Message,
     target: &str,
     content: &str,
-    state: &SharedState,
+    _state: &SharedState,
+    database: &std::sync::Arc<tokio::sync::Mutex<Database>>,
+    server_name: &str,
 ) -> Result<()> {
     let source_nick = message.source_nickname().unwrap_or("system").to_string();
 
@@ -319,13 +333,12 @@ async fn handle_notice(
         message_type: MessageType::Notice,
         content: content.to_string(),
         channel: None,
+        server_name: server_name.to_string(),
     };
 
-    let state_lock = state.lock().await;
-    if let Err(e) = Database::new(&state_lock.config.storage.database_path)
-        .and_then(|db| db.insert_message(&irc_msg))
-    {
-        error!("Failed to store notice: {}", e);
+    let db = database.lock().await;
+    if let Err(e) = db.insert_message(&irc_msg) {
+        error!("[{}] Failed to store notice: {}", server_name, e);
     }
 
     Ok(())
@@ -338,20 +351,30 @@ async fn handle_ctcp(
     _target: &str,
     content: &str,
     state: &SharedState,
+    database: &std::sync::Arc<tokio::sync::Mutex<Database>>,
+    server_name: &str,
 ) -> Result<()> {
     // Check if this is a DCC SEND offer
     if content.contains("DCC SEND") {
         if let Ok(offer) = crate::irc::parse_dcc_send(content) {
             info!(
-                "Received DCC SEND offer from {}: {} ({} bytes)",
-                source_nick, offer.filename, offer.filesize
+                "[{}] Received DCC SEND offer from {}: {} ({} bytes)",
+                server_name, source_nick, offer.filename, offer.filesize
             );
 
-            let state_lock = state.lock().await;
+            let state_lock = state.read().await;
+
+            // Get DCC config for this server
+            let dcc_config = if let Some(ctx) = state_lock.servers.get(server_name) {
+                &ctx.config.dcc
+            } else {
+                warn!("[{}] Server context not found", server_name);
+                return Ok(());
+            };
 
             // Check if DCC is enabled
-            if !state_lock.config.dcc.enabled || !state_lock.config.dcc.auto_accept {
-                info!("DCC auto-accept disabled, ignoring offer");
+            if !dcc_config.enabled || !dcc_config.auto_accept {
+                info!("[{}] DCC auto-accept disabled, ignoring offer", server_name);
                 return Ok(());
             }
 
@@ -373,18 +396,20 @@ async fn handle_ctcp(
                 extraction_error: None,
             };
 
-            let db = Database::new(&state_lock.config.storage.database_path)?;
+            let db = database.lock().await;
             let transfer_id = db.insert_dcc_transfer(&transfer)?;
+            drop(db);
 
-            info!("Created DCC transfer record with ID: {}", transfer_id);
+            info!("[{}] Created DCC transfer record with ID: {}", server_name, transfer_id);
 
             // Spawn download task
-            let download_dir = state_lock.config.dcc.download_directory.clone();
-            let max_size = state_lock.config.dcc.max_file_size_bytes;
-            let db_path = state_lock.config.storage.database_path.clone();
+            let download_dir = dcc_config.download_directory.clone();
+            let max_size = dcc_config.max_file_size_bytes;
 
             drop(state_lock); // Release lock before spawning
 
+            let db_clone = std::sync::Arc::clone(database);
+            let server_name_clone = server_name.to_string();
             tokio::spawn(async move {
                 let result = crate::irc::download_dcc_file(
                     &offer,
@@ -393,23 +418,17 @@ async fn handle_ctcp(
                 )
                 .await;
 
-                let db = match Database::new(&db_path) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        error!("Failed to open database: {}", e);
-                        return;
-                    }
-                };
+                let db = db_clone.lock().await;
 
                 match result {
                     Ok((filepath, size, extracted_files)) => {
-                        info!("DCC download completed: {:?}", filepath);
+                        info!("[{}] DCC download completed: {:?}", server_name_clone, filepath);
 
                         // Canonicalize path to ensure it's absolute and usable from any working directory
                         let absolute_path = match filepath.canonicalize() {
                             Ok(path) => path.to_string_lossy().to_string(),
                             Err(e) => {
-                                error!("Failed to canonicalize path {:?}: {}", filepath, e);
+                                error!("[{}] Failed to canonicalize path {:?}: {}", server_name_clone, filepath, e);
                                 filepath.to_string_lossy().to_string()
                             }
                         };
@@ -421,7 +440,7 @@ async fn handle_ctcp(
                             Some(&absolute_path),
                             None,
                         ) {
-                            error!("Failed to update transfer status: {}", e);
+                            error!("[{}] Failed to update transfer status: {}", server_name_clone, e);
                         }
 
                         // Update extraction metadata if zip was extracted
@@ -432,12 +451,12 @@ async fn handle_ctcp(
                                 Some(&files),
                                 None,
                             ) {
-                                error!("Failed to update extraction metadata: {}", e);
+                                error!("[{}] Failed to update extraction metadata: {}", server_name_clone, e);
                             }
                         }
                     }
                     Err(e) => {
-                        error!("DCC download failed: {}", e);
+                        error!("[{}] DCC download failed: {}", server_name_clone, e);
                         if let Err(e) = db.update_dcc_transfer_status(
                             transfer_id,
                             DccStatus::Failed,
@@ -445,7 +464,7 @@ async fn handle_ctcp(
                             None,
                             Some(&e.to_string()),
                         ) {
-                            error!("Failed to update transfer status: {}", e);
+                            error!("[{}] Failed to update transfer status: {}", server_name_clone, e);
                         }
                     }
                 }
@@ -457,16 +476,18 @@ async fn handle_ctcp(
 }
 
 /// Handle JOIN command
-async fn handle_join(message: &Message, channel: &str, state: &SharedState) -> Result<()> {
+async fn handle_join(message: &Message, channel: &str, state: &SharedState, server_name: &str) -> Result<()> {
     if let Some(nick) = message.source_nickname() {
-        let mut state_lock = state.lock().await;
+        let mut state_lock = state.write().await;
 
         // Check if it's our own join
-        if Some(nick) == state_lock.current_nick.as_deref()
-            && !state_lock.joined_channels.contains(&channel.to_string())
-        {
-            state_lock.joined_channels.push(channel.to_string());
-            info!("Joined channel: {}", channel);
+        if let Some(ctx) = state_lock.servers.get_mut(server_name) {
+            if Some(nick) == ctx.current_nick.as_deref()
+                && !ctx.joined_channels.contains(&channel.to_string())
+            {
+                ctx.joined_channels.insert(channel.to_string());
+                info!("[{}] Joined channel: {}", server_name, channel);
+            }
         }
     }
 
@@ -474,14 +495,16 @@ async fn handle_join(message: &Message, channel: &str, state: &SharedState) -> R
 }
 
 /// Handle PART command
-async fn handle_part(message: &Message, channel: &str, state: &SharedState) -> Result<()> {
+async fn handle_part(message: &Message, channel: &str, state: &SharedState, server_name: &str) -> Result<()> {
     if let Some(nick) = message.source_nickname() {
-        let mut state_lock = state.lock().await;
+        let mut state_lock = state.write().await;
 
         // Check if it's our own part
-        if Some(nick) == state_lock.current_nick.as_deref() {
-            state_lock.joined_channels.retain(|c| c != channel);
-            info!("Left channel: {}", channel);
+        if let Some(ctx) = state_lock.servers.get_mut(server_name) {
+            if Some(nick) == ctx.current_nick.as_deref() {
+                ctx.joined_channels.remove(&channel.to_string());
+                info!("[{}] Left channel: {}", server_name, channel);
+            }
         }
     }
 
