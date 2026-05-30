@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// Connection status enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -25,6 +25,8 @@ pub struct IrcMessage {
     pub message_type: MessageType,
     pub content: String,
     pub channel: Option<String>,
+    #[serde(default)]
+    pub server_name: String,
 }
 
 /// Message type enum
@@ -121,21 +123,57 @@ pub struct ExtractedFile {
     pub size: u64,
 }
 
-/// Application state shared across handlers
-pub struct AppState {
-    pub irc_sender: Option<tokio::sync::mpsc::UnboundedSender<IrcCommand>>,
+/// Per-server runtime context
+#[derive(Debug)]
+pub struct ServerContext {
+    pub config: crate::config::ServerConfig,
+    pub client: Option<irc::client::Client>,
     pub connection_status: ConnectionStatus,
-    pub connection_start: Option<DateTime<Utc>>,
-    pub current_nick: Option<String>,
-    pub joined_channels: Vec<String>,
-    #[allow(dead_code)]
-    pub db_path: String,
-    pub config: crate::config::IrcMcpConfig,
-    #[allow(dead_code)]
-    pub active_dcc_transfers: HashMap<u64, DccTransfer>,
+    pub irc_sender: Option<tokio::sync::mpsc::UnboundedSender<IrcCommand>>,
+    pub joined_channels: HashSet<String>,
+    pub dcc_transfers: HashMap<String, DccTransfer>,
+    pub reconnect_attempts: u32,
 }
 
-/// IRC commands that can be sent to the client task
+impl ServerContext {
+    pub fn new(config: crate::config::ServerConfig) -> Self {
+        Self {
+            config,
+            client: None,
+            connection_status: ConnectionStatus::Disconnected,
+            irc_sender: None,
+            joined_channels: HashSet::new(),
+            dcc_transfers: HashMap::new(),
+            reconnect_attempts: 0,
+        }
+    }
+}
+
+/// Application state shared across handlers
+pub struct AppState {
+    pub servers: HashMap<String, ServerContext>,
+    pub active_server: String,
+    pub config: crate::config::IrcMcpConfig,
+}
+
+impl AppState {
+    pub fn new(config: crate::config::IrcMcpConfig) -> Self {
+        let active_server = config.mcp.default_server.clone();
+        let servers = config
+            .servers
+            .iter()
+            .map(|sc| (sc.name.clone(), ServerContext::new(sc.clone())))
+            .collect();
+
+        Self {
+            servers,
+            active_server,
+            config,
+        }
+    }
+}
+
+/// IRC commands that can be sent to a specific server's client task
 #[derive(Debug)]
 pub enum IrcCommand {
     Join(String),
@@ -145,4 +183,4 @@ pub enum IrcCommand {
     Quit(String),
 }
 
-pub type SharedState = Arc<Mutex<AppState>>;
+pub type SharedState = Arc<RwLock<AppState>>;
