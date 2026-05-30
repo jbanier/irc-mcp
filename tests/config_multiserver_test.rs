@@ -132,3 +132,38 @@ mcp:
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Duplicate server name"));
 }
+
+#[test]
+fn test_validate_invalid_default_server() {
+    let config_content = r#"
+servers:
+  - name: "server1"
+    address: "irc.example.org"
+    port: 6667
+    use_tls: false
+    identity:
+      nickname: "bot1"
+      username: "bot"
+      realname: "Test"
+    channels: []
+    dcc:
+      enabled: false
+
+storage:
+  database_path: "./test.db"
+  message_retention_days: 90
+  cleanup_interval_hours: 24
+
+mcp:
+  listen_address: "127.0.0.1"
+  port: 5001
+  default_server: "nonexistent"
+"#;
+
+    let mut file = NamedTempFile::new().unwrap();
+    file.write_all(config_content.as_bytes()).unwrap();
+
+    let result = IrcMcpConfig::from_file(file.path());
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("default_server 'nonexistent' not found"));
+}

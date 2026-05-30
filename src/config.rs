@@ -30,7 +30,7 @@ pub struct SaslConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub username: Option<String>,
+    pub username: Option<String>,  // If None, uses identity.username
 }
 
 impl Default for SaslConfig {
@@ -113,19 +113,17 @@ impl IrcMcpConfig {
             anyhow::bail!("At least one server must be configured");
         }
 
-        // Check for duplicate server names
+        // Check for duplicate server names and validate server names
         let mut seen_names = HashSet::new();
-        for server in &self.servers {
-            if !seen_names.insert(&server.name) {
-                anyhow::bail!("Duplicate server name: {}", server.name);
-            }
-        }
-
-        // Validate each server
         for server in &self.servers {
             if server.name.is_empty() {
                 anyhow::bail!("Server name cannot be empty");
             }
+            if !seen_names.insert(&server.name) {
+                anyhow::bail!("Duplicate server name: {}", server.name);
+            }
+
+            // Rest of per-server validation
             if server.address.is_empty() {
                 anyhow::bail!("Server address cannot be empty for server '{}'", server.name);
             }
@@ -147,6 +145,11 @@ impl IrcMcpConfig {
         }
 
         Ok(())
+    }
+
+    /// Get server configuration by name
+    pub fn server_by_name(&self, name: &str) -> Option<&ServerConfig> {
+        self.servers.iter().find(|s| s.name == name)
     }
 
     /// Expand shell variables in paths
