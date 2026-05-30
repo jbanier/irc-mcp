@@ -21,9 +21,11 @@ shellexpand = "3.1"
 futures-util = "0.3"
 base64 = "0.22"
 zip = "0.6"
+filetime = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.0"
 tower = "0.5"
 zip = "0.6"
+filetime = "0.2"
