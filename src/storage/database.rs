@@ -37,12 +37,14 @@ impl Database {
                 message_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 channel TEXT,
-                UNIQUE(timestamp, source_nick, target, content)
+                server_name TEXT NOT NULL DEFAULT '',
+                UNIQUE(timestamp, source_nick, target, content, server_name)
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_target ON messages(target, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_server ON messages(server_name, timestamp DESC);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=id);
 
@@ -60,10 +62,12 @@ impl Database {
                 port INTEGER,
                 extraction_status TEXT,
                 extraction_error TEXT,
-                extracted_files_json TEXT
+                extracted_files_json TEXT,
+                server_name TEXT NOT NULL DEFAULT ''
             );
 
             CREATE INDEX IF NOT EXISTS idx_dcc_status ON dcc_transfers(status, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_dcc_server ON dcc_transfers(server_name, timestamp DESC);
 
             CREATE TABLE IF NOT EXISTS channels (
                 channel_name TEXT PRIMARY KEY,
@@ -79,20 +83,50 @@ impl Database {
 
     /// Migrate database schema to add extraction columns if missing
     fn migrate_schema(&self) -> Result<()> {
-        // Check if extraction columns exist
-        let columns: Vec<String> = self
+        // Check if extraction columns exist in dcc_transfers
+        let dcc_columns: Vec<String> = self
             .conn
             .prepare("PRAGMA table_info(dcc_transfers)")?
             .query_map([], |row| row.get(1))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        if !columns.contains(&"extraction_status".to_string()) {
+        if !dcc_columns.contains(&"extraction_status".to_string()) {
             self.conn.execute_batch(
                 r#"
                 ALTER TABLE dcc_transfers ADD COLUMN extraction_status TEXT;
                 ALTER TABLE dcc_transfers ADD COLUMN extraction_error TEXT;
                 ALTER TABLE dcc_transfers ADD COLUMN extracted_files_json TEXT;
                 "#,
+            )?;
+        }
+
+        // Add server_name column to dcc_transfers if missing
+        if !dcc_columns.contains(&"server_name".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE dcc_transfers ADD COLUMN server_name TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dcc_server ON dcc_transfers(server_name, timestamp DESC)",
+                [],
+            )?;
+        }
+
+        // Check if server_name exists in messages table
+        let msg_columns: Vec<String> = self
+            .conn
+            .prepare("PRAGMA table_info(messages)")?
+            .query_map([], |row| row.get(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !msg_columns.contains(&"server_name".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE messages ADD COLUMN server_name TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_server ON messages(server_name, timestamp DESC)",
+                [],
             )?;
         }
 
@@ -106,8 +140,8 @@ impl Database {
 
         self.conn
             .execute(
-                "INSERT OR IGNORE INTO messages (timestamp, source_nick, target, message_type, content, channel)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO messages (timestamp, source_nick, target, message_type, content, channel, server_name)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     timestamp,
                     &msg.source_nick,
@@ -115,6 +149,7 @@ impl Database {
                     message_type,
                     &msg.content,
                     &msg.channel,
+                    &msg.server_name,
                 ],
             )
             .context("Failed to insert message")?;
@@ -130,9 +165,10 @@ impl Database {
         since: Option<DateTime<Utc>>,
         sender_filter: Option<&str>,
         search_query: Option<&str>,
+        server_filter: Option<&str>,
     ) -> Result<Vec<IrcMessage>> {
         let mut query = String::from(
-            "SELECT id, timestamp, source_nick, target, message_type, content, channel FROM messages WHERE target = ?"
+            "SELECT id, timestamp, source_nick, target, message_type, content, channel, server_name FROM messages WHERE target = ?"
         );
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(target.to_string())];
 
@@ -149,6 +185,11 @@ impl Database {
         if let Some(search) = search_query {
             query.push_str(" AND content LIKE ?");
             params.push(Box::new(format!("%{}%", search)));
+        }
+
+        if let Some(server) = server_filter {
+            query.push_str(" AND server_name = ?");
+            params.push(Box::new(server.to_string()));
         }
 
         query.push_str(" ORDER BY timestamp DESC LIMIT ?");
@@ -175,6 +216,7 @@ impl Database {
                     .unwrap_or(MessageType::System),
                 content: row.get(5)?,
                 channel: row.get(6)?,
+                server_name: row.get(7)?,
             })
         })?;
 
@@ -359,7 +401,7 @@ impl Database {
         {
             (
                 format!(
-                    "SELECT m.id, m.timestamp, m.source_nick, m.target, m.message_type, m.content, m.channel
+                    "SELECT m.id, m.timestamp, m.source_nick, m.target, m.message_type, m.content, m.channel, m.server_name
                      FROM messages m JOIN messages_fts ON m.id = messages_fts.rowid
                      WHERE messages_fts MATCH ? AND m.channel = ?
                      ORDER BY m.timestamp DESC LIMIT {}",
@@ -370,7 +412,7 @@ impl Database {
         } else {
             (
                 format!(
-                    "SELECT m.id, m.timestamp, m.source_nick, m.target, m.message_type, m.content, m.channel
+                    "SELECT m.id, m.timestamp, m.source_nick, m.target, m.message_type, m.content, m.channel, m.server_name
                      FROM messages m JOIN messages_fts ON m.id = messages_fts.rowid
                      WHERE messages_fts MATCH ?
                      ORDER BY m.timestamp DESC LIMIT {}",
@@ -401,10 +443,22 @@ impl Database {
                     .unwrap_or(MessageType::System),
                 content: row.get(5)?,
                 channel: row.get(6)?,
+                server_name: row.get(7)?,
             })
         })?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .context("Failed to search messages")
+    }
+
+    /// Delete messages older than the given timestamp
+    pub fn delete_messages_before(&self, before: DateTime<Utc>) -> Result<usize> {
+        let timestamp = before.to_rfc3339();
+        let deleted = self
+            .conn
+            .execute("DELETE FROM messages WHERE timestamp < ?", params![timestamp])
+            .context("Failed to delete old messages")?;
+
+        Ok(deleted)
     }
 }
