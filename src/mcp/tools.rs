@@ -1,12 +1,49 @@
-use crate::irc::{start_message_processor, IrcClientManager};
 use crate::storage::Database;
 use crate::types::{ConnectionStatus, DccStatus, IrcCommand, SharedState};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::fs;
-use tokio::sync::mpsc;
-use tracing::{error, info};
+
+/// Get the target server name (from param or active server)
+async fn resolve_server_name(
+    state: &SharedState,
+    server_param: Option<&str>,
+) -> Result<String, String> {
+    let state_read = state.read().await;
+
+    let server_name = if let Some(server) = server_param {
+        server.to_string()
+    } else {
+        state_read.active_server.clone()
+    };
+
+    if !state_read.servers.contains_key(&server_name) {
+        return Err(format!("Server '{}' not configured", server_name));
+    }
+
+    Ok(server_name)
+}
+
+/// Get IRC sender for a server
+async fn get_server_sender(
+    state: &SharedState,
+    server_name: &str,
+) -> Result<tokio::sync::mpsc::UnboundedSender<IrcCommand>, String> {
+    let state_read = state.read().await;
+
+    let ctx = state_read
+        .servers
+        .get(server_name)
+        .ok_or_else(|| format!("Server '{}' not found", server_name))?;
+
+    let sender = ctx
+        .irc_sender
+        .clone()
+        .ok_or_else(|| format!("Server '{}' is not connected", server_name))?;
+
+    Ok(sender)
+}
 
 /// Handle MCP tool call
 pub async fn handle_tool_call(params: Value, state: SharedState) -> Result<Value> {
@@ -30,52 +67,44 @@ pub async fn handle_tool_call(params: Value, state: SharedState) -> Result<Value
         "irc_read_dcc_file" => tool_irc_read_dcc_file(arguments, state).await,
         "irc_send_raw" => tool_irc_send_raw(arguments, state).await,
         "irc_search_history" => tool_irc_search_history(arguments, state).await,
+        "irc_set_active_server" => tool_irc_set_active_server(arguments, state).await,
+        "irc_get_active_server" => tool_irc_get_active_server(state).await,
+        "irc_list_servers" => tool_irc_list_servers(state).await,
+        "irc_connect_server" => tool_irc_connect_server(arguments, state).await,
+        "irc_disconnect_server" => tool_irc_disconnect_server(arguments, state).await,
         _ => bail!("Unknown tool: {}", tool_name),
     }
 }
 
 async fn tool_irc_connect(state: SharedState) -> Result<Value> {
-    let mut state_lock = state.lock().await;
+    // In multi-server mode, this tool just returns the active server status
+    // Actual connection is managed by ServerManager at startup
+    let state_read = state.read().await;
+    let server_name = &state_read.active_server;
 
-    if state_lock.connection_status == ConnectionStatus::Connected {
-        return Ok(json!({
+    let ctx = state_read
+        .servers
+        .get(server_name)
+        .ok_or_else(|| anyhow::anyhow!("Active server '{}' not found", server_name))?;
+
+    if ctx.connection_status == ConnectionStatus::Connected {
+        Ok(json!({
             "success": true,
             "message": "Already connected",
-            "server": format!("{}:{}", state_lock.config.server.address, state_lock.config.server.port),
-            "nick": state_lock.current_nick,
-            "joined_channels": state_lock.joined_channels,
-        }));
+            "server": format!("{}:{}", ctx.config.address, ctx.config.port),
+            "server_name": server_name,
+            "nick": ctx.current_nick,
+            "joined_channels": ctx.joined_channels,
+        }))
+    } else {
+        Ok(json!({
+            "success": false,
+            "message": "Not connected. Use irc_connect_server to connect manually.",
+            "server": format!("{}:{}", ctx.config.address, ctx.config.port),
+            "server_name": server_name,
+            "status": format!("{:?}", ctx.connection_status),
+        }))
     }
-
-    info!("Connecting to IRC server...");
-    state_lock.connection_status = ConnectionStatus::Connecting;
-
-    let manager = IrcClientManager::new(state_lock.config.clone());
-    let client = manager.connect().await?;
-
-    let nick = state_lock.config.identity.nickname.clone();
-    state_lock.current_nick = Some(nick.clone());
-    state_lock.connection_status = ConnectionStatus::Connected;
-    state_lock.connection_start = Some(Utc::now());
-
-    // Create command channel
-    let (cmd_sender, cmd_receiver) = mpsc::unbounded_channel();
-    state_lock.irc_sender = Some(cmd_sender);
-
-    // Spawn message processor
-    let state_clone = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = start_message_processor(client, cmd_receiver, state_clone).await {
-            error!("Message processor error: {}", e);
-        }
-    });
-
-    Ok(json!({
-        "success": true,
-        "server": format!("{}:{}", state_lock.config.server.address, state_lock.config.server.port),
-        "nick": nick,
-        "joined_channels": state_lock.config.channels,
-    }))
 }
 
 async fn tool_irc_disconnect(arguments: Value, state: SharedState) -> Result<Value> {
@@ -83,39 +112,57 @@ async fn tool_irc_disconnect(arguments: Value, state: SharedState) -> Result<Val
         .as_str()
         .unwrap_or("Disconnecting");
 
-    let mut state_lock = state.lock().await;
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    if let Some(sender) = &state_lock.irc_sender {
+    let mut state_write = state.write().await;
+    let ctx = state_write
+        .servers
+        .get_mut(&server_name)
+        .ok_or_else(|| anyhow::anyhow!("Server '{}' not found", server_name))?;
+
+    if let Some(sender) = &ctx.irc_sender {
         sender.send(IrcCommand::Quit(quit_message.to_string()))?;
-        state_lock.connection_status = ConnectionStatus::Disconnected;
-        state_lock.current_nick = None;
-        state_lock.joined_channels.clear();
+        ctx.connection_status = ConnectionStatus::Disconnected;
+        ctx.current_nick = None;
+        ctx.joined_channels.clear();
 
         Ok(json!({
             "success": true,
+            "server": server_name,
             "message": "Disconnected from IRC server"
         }))
     } else {
         Ok(json!({
             "success": false,
+            "server": server_name,
             "message": "Not connected"
         }))
     }
 }
 
 async fn tool_irc_status(state: SharedState) -> Result<Value> {
-    let state_lock = state.lock().await;
+    let state_read = state.read().await;
+    let server_name = &state_read.active_server;
 
-    let uptime_seconds = state_lock
+    let ctx = state_read
+        .servers
+        .get(server_name)
+        .ok_or_else(|| anyhow::anyhow!("Active server '{}' not found", server_name))?;
+
+    let uptime_seconds = ctx
         .connection_start
         .map(|start| (Utc::now() - start).num_seconds())
         .unwrap_or(0);
 
     Ok(json!({
-        "connected": state_lock.connection_status == ConnectionStatus::Connected,
-        "server": format!("{}:{}", state_lock.config.server.address, state_lock.config.server.port),
-        "nick": state_lock.current_nick,
-        "channels": state_lock.joined_channels,
+        "connected": ctx.connection_status == ConnectionStatus::Connected,
+        "server": format!("{}:{}", ctx.config.address, ctx.config.port),
+        "server_name": server_name,
+        "nick": ctx.current_nick,
+        "channels": ctx.joined_channels,
         "uptime_seconds": uptime_seconds,
     }))
 }
@@ -129,18 +176,21 @@ async fn tool_irc_join_channel(arguments: Value, state: SharedState) -> Result<V
         bail!("Channel name must start with #");
     }
 
-    let state_lock = state.lock().await;
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let sender = get_server_sender(&state, &server_name)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    if let Some(sender) = &state_lock.irc_sender {
-        sender.send(IrcCommand::Join(channel.to_string()))?;
-        Ok(json!({
-            "success": true,
-            "channel": channel,
-            "message": format!("Joining channel {}", channel)
-        }))
-    } else {
-        bail!("Not connected to IRC server");
-    }
+    sender.send(IrcCommand::Join(channel.to_string()))?;
+    Ok(json!({
+        "success": true,
+        "server": server_name,
+        "channel": channel,
+        "message": format!("Joining channel {}", channel)
+    }))
 }
 
 async fn tool_irc_part_channel(arguments: Value, state: SharedState) -> Result<Value> {
@@ -149,18 +199,20 @@ async fn tool_irc_part_channel(arguments: Value, state: SharedState) -> Result<V
         .ok_or_else(|| anyhow::anyhow!("Missing channel parameter"))?;
 
     let message = arguments["message"].as_str().map(|s| s.to_string());
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let sender = get_server_sender(&state, &server_name)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    let state_lock = state.lock().await;
-
-    if let Some(sender) = &state_lock.irc_sender {
-        sender.send(IrcCommand::Part(channel.to_string(), message))?;
-        Ok(json!({
-            "success": true,
-            "channel": channel,
-        }))
-    } else {
-        bail!("Not connected to IRC server");
-    }
+    sender.send(IrcCommand::Part(channel.to_string(), message))?;
+    Ok(json!({
+        "success": true,
+        "server": server_name,
+        "channel": channel,
+    }))
 }
 
 async fn tool_irc_send_message(arguments: Value, state: SharedState) -> Result<Value> {
@@ -172,22 +224,25 @@ async fn tool_irc_send_message(arguments: Value, state: SharedState) -> Result<V
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing message parameter"))?;
 
-    let state_lock = state.lock().await;
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let sender = get_server_sender(&state, &server_name)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    if let Some(sender) = &state_lock.irc_sender {
-        sender.send(IrcCommand::SendMessage(
-            target.to_string(),
-            message.to_string(),
-        ))?;
+    sender.send(IrcCommand::SendMessage(
+        target.to_string(),
+        message.to_string(),
+    ))?;
 
-        Ok(json!({
-            "success": true,
-            "target": target,
-            "message": "Message sent"
-        }))
-    } else {
-        bail!("Not connected to IRC server");
-    }
+    Ok(json!({
+        "success": true,
+        "server": server_name,
+        "target": target,
+        "message": "Message sent"
+    }))
 }
 
 async fn tool_irc_get_messages(arguments: Value, state: SharedState) -> Result<Value> {
@@ -205,12 +260,21 @@ async fn tool_irc_get_messages(arguments: Value, state: SharedState) -> Result<V
     let sender_filter = arguments["sender_filter"].as_str();
     let search_query = arguments["search_query"].as_str();
 
-    let state_lock = state.lock().await;
-    let db = Database::new(&state_lock.config.storage.database_path)?;
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    let messages = db.get_messages(target, limit, since, sender_filter, search_query)?;
+    let db_path = {
+        let state_read = state.read().await;
+        state_read.config.storage.database_path.clone()
+    };
+
+    let db = Database::new(&db_path)?;
+    let messages = db.get_messages(target, limit, since, sender_filter, search_query, Some(&server_name))?;
 
     Ok(json!({
+        "server": server_name,
         "messages": messages,
         "count": messages.len(),
         "has_more": messages.len() >= limit,
@@ -222,21 +286,24 @@ async fn tool_irc_get_channel_users(arguments: Value, state: SharedState) -> Res
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing channel parameter"))?;
 
-    let state_lock = state.lock().await;
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let sender = get_server_sender(&state, &server_name)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    if let Some(sender) = &state_lock.irc_sender {
-        // Send NAMES command via raw command
-        sender.send(IrcCommand::SendRaw(format!("NAMES {}", channel)))?;
+    // Send NAMES command via raw command
+    sender.send(IrcCommand::SendRaw(format!("NAMES {}", channel)))?;
 
-        // Note: Getting the actual user list requires parsing NAMES responses
-        // For now, return a pending status
-        Ok(json!({
-            "channel": channel,
-            "message": "NAMES request sent - user list will be in message stream",
-        }))
-    } else {
-        bail!("Not connected to IRC server");
-    }
+    // Note: Getting the actual user list requires parsing NAMES responses
+    // For now, return a pending status
+    Ok(json!({
+        "server": server_name,
+        "channel": channel,
+        "message": "NAMES request sent - user list will be in message stream",
+    }))
 }
 
 async fn tool_irc_list_dcc_transfers(arguments: Value, state: SharedState) -> Result<Value> {
@@ -251,9 +318,12 @@ async fn tool_irc_list_dcc_transfers(arguments: Value, state: SharedState) -> Re
 
     let limit = arguments["limit"].as_u64().unwrap_or(50) as usize;
 
-    let state_lock = state.lock().await;
-    let db = Database::new(&state_lock.config.storage.database_path)?;
+    let db_path = {
+        let state_read = state.read().await;
+        state_read.config.storage.database_path.clone()
+    };
 
+    let db = Database::new(&db_path)?;
     let transfers = db.list_dcc_transfers(status_filter, limit)?;
 
     Ok(json!({ "transfers": transfers }))
@@ -264,9 +334,12 @@ async fn tool_irc_get_dcc_file_info(arguments: Value, state: SharedState) -> Res
         .as_i64()
         .ok_or_else(|| anyhow::anyhow!("Missing or invalid transfer_id parameter"))?;
 
-    let state_lock = state.lock().await;
-    let db = Database::new(&state_lock.config.storage.database_path)?;
+    let db_path = {
+        let state_read = state.read().await;
+        state_read.config.storage.database_path.clone()
+    };
 
+    let db = Database::new(&db_path)?;
     let transfer = db
         .get_dcc_transfer(transfer_id)?
         .ok_or_else(|| anyhow::anyhow!("Transfer not found"))?;
@@ -283,9 +356,12 @@ async fn tool_irc_read_dcc_file(arguments: Value, state: SharedState) -> Result<
     let length = arguments["length"].as_u64().unwrap_or(0);
     let encoding = arguments["encoding"].as_str().unwrap_or("utf8");
 
-    let state_lock = state.lock().await;
-    let db = Database::new(&state_lock.config.storage.database_path)?;
+    let db_path = {
+        let state_read = state.read().await;
+        state_read.config.storage.database_path.clone()
+    };
 
+    let db = Database::new(&db_path)?;
     let transfer = db
         .get_dcc_transfer(transfer_id)?
         .ok_or_else(|| anyhow::anyhow!("Transfer not found"))?;
@@ -338,18 +414,21 @@ async fn tool_irc_send_raw(arguments: Value, state: SharedState) -> Result<Value
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing command parameter"))?;
 
-    let state_lock = state.lock().await;
+    let server_param = arguments["server"].as_str();
+    let server_name = resolve_server_name(&state, server_param)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let sender = get_server_sender(&state, &server_name)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    if let Some(sender) = &state_lock.irc_sender {
-        sender.send(IrcCommand::SendRaw(command.to_string()))?;
+    sender.send(IrcCommand::SendRaw(command.to_string()))?;
 
-        Ok(json!({
-            "success": true,
-            "command": command,
-        }))
-    } else {
-        bail!("Not connected to IRC server");
-    }
+    Ok(json!({
+        "success": true,
+        "server": server_name,
+        "command": command,
+    }))
 }
 
 async fn tool_irc_search_history(arguments: Value, state: SharedState) -> Result<Value> {
@@ -360,14 +439,96 @@ async fn tool_irc_search_history(arguments: Value, state: SharedState) -> Result
     let channel_filter = arguments["channel_filter"].as_str();
     let limit = arguments["limit"].as_u64().unwrap_or(100) as usize;
 
-    let state_lock = state.lock().await;
-    let db = Database::new(&state_lock.config.storage.database_path)?;
+    let db_path = {
+        let state_read = state.read().await;
+        state_read.config.storage.database_path.clone()
+    };
 
+    let db = Database::new(&db_path)?;
     let messages = db.search_messages(query, channel_filter, limit)?;
 
     Ok(json!({
         "messages": messages,
         "count": messages.len(),
         "query": query,
+    }))
+}
+
+async fn tool_irc_set_active_server(arguments: Value, state: SharedState) -> Result<Value> {
+    let server = arguments["server"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing server parameter"))?;
+
+    let mut state_write = state.write().await;
+
+    if !state_write.servers.contains_key(server) {
+        bail!("Server '{}' not configured", server);
+    }
+
+    state_write.active_server = server.to_string();
+
+    Ok(json!({
+        "success": true,
+        "active_server": server
+    }))
+}
+
+async fn tool_irc_get_active_server(state: SharedState) -> Result<Value> {
+    let state_read = state.read().await;
+    Ok(json!({
+        "active_server": state_read.active_server
+    }))
+}
+
+async fn tool_irc_list_servers(state: SharedState) -> Result<Value> {
+    let state_read = state.read().await;
+
+    let servers: Vec<_> = state_read
+        .servers
+        .iter()
+        .map(|(name, ctx)| {
+            json!({
+                "name": name,
+                "address": ctx.config.address,
+                "port": ctx.config.port,
+                "status": format!("{:?}", ctx.connection_status),
+                "channels_joined": ctx.joined_channels.len(),
+                "use_tls": ctx.config.use_tls,
+                "sasl_enabled": ctx.config.sasl.enabled,
+            })
+        })
+        .collect();
+
+    Ok(json!({ "servers": servers }))
+}
+
+async fn tool_irc_connect_server(_arguments: Value, _state: SharedState) -> Result<Value> {
+    // Manual connection will be implemented in Task 9 with ServerManager integration
+    // For now, connections are managed automatically at startup
+    bail!("Manual server connection not yet implemented. Servers are connected automatically at startup. Use irc_status or irc_list_servers to check connection status.")
+}
+
+async fn tool_irc_disconnect_server(arguments: Value, state: SharedState) -> Result<Value> {
+    let server_name = arguments["server"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing server parameter"))?;
+
+    let mut state_write = state.write().await;
+
+    let ctx = state_write
+        .servers
+        .get_mut(server_name)
+        .ok_or_else(|| anyhow::anyhow!("Server '{}' not found", server_name))?;
+
+    if let Some(sender) = &ctx.irc_sender {
+        let _ = sender.send(IrcCommand::Quit("Manual disconnect".to_string()));
+    }
+
+    ctx.connection_status = ConnectionStatus::Disconnected;
+    ctx.irc_sender = None;
+
+    Ok(json!({
+        "success": true,
+        "server": server_name
     }))
 }

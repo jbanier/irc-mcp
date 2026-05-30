@@ -105,6 +105,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "quit_message": {
                         "type": "string",
                         "description": "Optional quit message"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 }
             }
@@ -127,6 +131,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "channel": {
                         "type": "string",
                         "description": "Channel name (must start with #)"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 },
                 "required": ["channel"]
@@ -145,6 +153,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "message": {
                         "type": "string",
                         "description": "Optional part message"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 },
                 "required": ["channel"]
@@ -163,6 +175,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "message": {
                         "type": "string",
                         "description": "Message content"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 },
                 "required": ["target", "message"]
@@ -194,6 +210,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "search_query": {
                         "type": "string",
                         "description": "Search in message content"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 },
                 "required": ["target"]
@@ -208,6 +228,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "channel": {
                         "type": "string",
                         "description": "Channel name"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 },
                 "required": ["channel"]
@@ -284,6 +308,10 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     "command": {
                         "type": "string",
                         "description": "Raw IRC command"
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Server name (defaults to active server)"
                     }
                 },
                 "required": ["command"]
@@ -309,6 +337,64 @@ async fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 "required": ["query"]
+            }
+        }),
+        json!({
+            "name": "irc_set_active_server",
+            "description": "Set the active IRC server for subsequent commands",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "Server name to set as active"
+                    }
+                },
+                "required": ["server"]
+            }
+        }),
+        json!({
+            "name": "irc_get_active_server",
+            "description": "Get the currently active IRC server name",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }),
+        json!({
+            "name": "irc_list_servers",
+            "description": "List all configured IRC servers with their connection status",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }),
+        json!({
+            "name": "irc_connect_server",
+            "description": "Manually connect to a specific IRC server",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "Server name to connect"
+                    }
+                },
+                "required": ["server"]
+            }
+        }),
+        json!({
+            "name": "irc_disconnect_server",
+            "description": "Disconnect from a specific IRC server",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "Server name to disconnect"
+                    }
+                },
+                "required": ["server"]
             }
         }),
     ];
