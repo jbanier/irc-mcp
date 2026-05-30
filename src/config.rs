@@ -1,4 +1,3 @@
-// src/config.rs - replace entire file
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
